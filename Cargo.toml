@@ -1,0 +1,46 @@
+[package]
+name = "ikigai-bayes"
+version = "0.1.0"
+edition = "2021"
+# `std::fs::File::try_lock`, which keeps one writer per state directory, is stable from 1.89;
+# the shared CI's msrv job builds and tests on this line.
+rust-version = "1.89"
+# MSRV-aware resolution (cargo's resolver 3): from each dependency's compatible range, the
+# newest version that still builds on `rust-version`. CI commits no lockfile, so without it a
+# fresh resolve could take a dependency that needs a newer toolchain than the msrv job runs.
+resolver = "3"
+license = "MIT OR Apache-2.0"
+description = "A naive-Bayes text classifier for ikigai, as resources: SpamBayes-style scoring (Robinson's per-token probabilities, Fisher's chi-squared combining) with a real unsure band, per-model golden threads, idempotent training keyed by message digest, and exact untraining."
+authors = ["Brian Sletten <brian.sletten@gmail.com>"]
+repository = "https://github.com/ikigai-rs/ikigai-bayes"
+homepage = "https://github.com/ikigai-rs/ikigai-bayes"
+readme = "README.md"
+keywords = ["ikigai", "roc", "bayes", "spam", "classifier"]
+categories = ["text-processing", "wasm"]
+# scripts/ downloads a public corpus for a local evaluation; it is not part of the library.
+exclude = ["scripts/"]
+
+[dependencies]
+# The published kernel, the SAME one the hosts link. **0.1.103 is a TESTED floor**: the API
+# this crate calls arrived earlier (`Invocation::depends_on`, 0.1.93; `ContentId`, long
+# before), and 0.1.103 is the head every test here ran against.
+# ⚠ `"0.1.103"` is a RANGE, `>=0.1.103, <0.2.0`: when core reaches 0.2 this line must move or
+# the crate freezes out of it.
+ikigai-core = "0.1.103"
+# The persisted model file and the `application/json` faces. Both are wasm-clean.
+# serde_json's parser refuses nesting past 128 levels by default, which is the only recursive
+# parse in this crate (a model file it wrote itself); request input is never parsed recursively.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# The module recipe as one test. **0.8.2 is the current published definition of "done"** and
+# the floor this suite needs: `Suite::required_on_mutating` (0.8.0) holds `train` to REQUIRED.
+# ⚠ `"0.8.2"` is `<0.9.0`: raise it when conformance moves, or this crate keeps reporting green
+# against an old rulebook.
+ikigai-conformance = "0.8.2"
+# `TurtleRenderer` gives the test kernels a JSON Meta face (without one the engine's routing
+# cannot be observed). One workspace with core, so it moves with core.
+ikigai-vocab = "0.1.103"
+# `block_on` for tests, doctests and the example: the crate itself spawns nothing.
+futures = "0.3"
