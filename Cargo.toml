@@ -34,11 +34,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
-# The module recipe as one test. **0.8.2 is the current published definition of "done"** and
-# the floor this suite needs: `Suite::required_on_mutating` (0.8.0) holds `train` to REQUIRED.
-# ⚠ `"0.8.2"` is `<0.9.0`: raise it when conformance moves, or this crate keeps reporting green
-# against an old rulebook.
-ikigai-conformance = "0.8.2"
+# The module recipe as one test. **0.10.0 is the current published definition of "done"**.
+# 0.9 added core 0.1.105's contract-shape checks (REQUIRED probes input groups, OUTPUTS honors
+# `output_from`, PIPELINE's named-only line, VALIDATE refuses a default on a binding) and
+# RECOMPUTE; 0.10 adds FAILURES, OFF unless a suite opts in with `Suite::check_failures()`.
+# `Suite::required_on_mutating` (0.8.0) still holds `train` to REQUIRED.
+# ⚠ `"0.10.0"` is `<0.11.0`: raise it when conformance moves, or this crate keeps reporting
+# green against an old rulebook.
+ikigai-conformance = "0.10.0"
 # `TurtleRenderer` gives the test kernels a JSON Meta face (without one the engine's routing
 # cannot be observed). One workspace with core, so it moves with core.
 ikigai-vocab = "0.1.103"
