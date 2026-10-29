@@ -14,13 +14,19 @@
 //! - **`untrain` declares no required input**: it takes `content` OR `digest=`, which an
 //!   `ArgSpec` cannot spell as "exactly one of". Its refusals are pinned in
 //!   `tests/resources.rs` (`bad_calls_are_refused_typed`).
+//! - **`BODIES` gets the kernel's own space** (`body_space`, the same `Arc`), so it compares each
+//!   source's `invoke` with its `invoke_body` instead of reporting them unprobed; `conforms`
+//!   asserts nothing is left unprobed, so that wiring cannot silently fall off.
+//! - **No argument is declared `reads_body`**: every door reads `content` whole (a message is
+//!   tokenized in one piece), so `BODY-INPUTS` has nothing to probe and no content store is
+//!   wired.
 
 mod common;
 
 use std::sync::Arc;
 
 use common::*;
-use ikigai_conformance::Suite;
+use ikigai_conformance::{Expected, Suite};
 use ikigai_core::Kernel;
 
 const SPACE_LABEL: &str = "ikigai_bayes::space(&bayes)";
@@ -37,7 +43,8 @@ fn walk() -> ikigai_conformance::Report {
         train(&kernel, model, "x", "spam");
     }
     let mut suite = Suite::new()
-        .host_named_space(SPACE_LABEL, space)
+        .host_named_space(SPACE_LABEL, space.clone())
+        .body_space(space)
         .required_on_mutating()
         .pure("bayes-models");
     for model in MODELS {
@@ -52,7 +59,7 @@ fn walk() -> ikigai_conformance::Report {
 fn conforms() {
     let report = walk();
     println!("{report}");
-    report.assert_clean();
+    report.assert_clean_with(&Expected::new().nothing_unprobed());
     assert!(
         report
             .to_string()

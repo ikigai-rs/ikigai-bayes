@@ -35,15 +35,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
-# The module recipe as one test. **0.11.0 is the current published definition of "done"**, on
+# The module recipe as one test. **0.12.0 is the current published definition of "done"**, on
 # core 0.2.0. 0.9 added core 0.1.105's contract-shape checks (REQUIRED probes input groups,
 # OUTPUTS honors `output_from`, PIPELINE's named-only line, VALIDATE refuses a default on a
 # binding) and RECOMPUTE; 0.10 added FAILURES behind `Suite::check_failures()`; 0.11 turns
-# FAILURES and DATATYPES on by default. `Suite::required_on_mutating` (0.8.0) still holds
-# `train` to REQUIRED.
-# ⚠ `"0.11.0"` is `<0.12.0`: raise it when conformance moves, or this crate keeps reporting
+# FAILURES and DATATYPES on by default; 0.12 turns on BODIES (given the kernel's space through
+# `Suite::body_space`) and BODY-INPUTS (no argument here is `reads_body`, so nothing to probe).
+# `Suite::required_on_mutating` (0.8.0) still holds `train` to REQUIRED.
+# ⚠ `"0.12.0"` is `<0.13.0`: raise it when conformance moves, or this crate keeps reporting
 # green against an old rulebook.
-ikigai-conformance = "0.11.0"
+ikigai-conformance = "0.12.0"
 # `TurtleRenderer` gives the test kernels a JSON Meta face (without one the engine's routing
 # cannot be observed). One workspace with core, so it moves with core: 0.2.0 is the streams
 # release (ledger #2261); the old `"0.1.103"` meant `<0.2.0` under 0.x rules.
