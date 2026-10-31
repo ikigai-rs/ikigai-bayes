@@ -228,6 +228,10 @@ writes it into a state directory for a host to open. Your messages stay on your 
 0.8.2 over two models: zero findings across 9 endpoints, every check selected, the write doors held
 to `REQUIRED` too.
 
+## Accessibility
+
+The scores, training outcomes and refusals this crate writes, the rules they follow, how they are tested and their known limitations are in [ACCESSIBILITY.md](ACCESSIBILITY.md). Report a barrier with an issue carrying the `accessibility` label.
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
