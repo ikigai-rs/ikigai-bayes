@@ -56,6 +56,30 @@ Every answer's exact shape is a doctest in `src/lib.rs`.
 
 ### Caching
 
+Models default to `spam` (high score) and `ham` (low score). For another question,
+use `ModelConfig::new("announcements").labels("yes", "no")?`. The first label is
+at or above the high cutoff; the second is below the low cutoff. `unsure` remains
+the class between them. Label names are distinct lowercase ASCII names, using
+letters, digits and single hyphens, up to 40 characters; `unsure` and `models` are
+reserved. `cutoffs(low, high)` still sets the two thresholds.
+
+Labels are declared in config and persisted in the model file to prevent a host
+from silently reinterpreting existing training. Reopening must use the same
+labels. Old files without labels retain `spam`/`ham`, and their serialization is
+unchanged. Train's `one_of`, response labels, classes, count keys and cutoff keys
+all use the declared names. Clue probabilities always point toward the first
+(high-score) label.
+
+Every score and stats answer includes a BLAKE3 trained-state digest: `modelDigest`
+in JSON and text, and `schema:version` on Turtle scores. The message's existing
+`digest` is separate. The state digest hashes deterministic model-file bytes with
+the model name empty: tokenizer version, labels and messages sorted by message
+digest (with sorted tokens). It excludes host name, cutoffs and rendering options.
+Identical trained states share a digest across model names and training order.
+Adding, moving or removing training changes it; idempotent training, failed writes,
+reads and reopening preserve it. Exact untraining restores the previous digest.
+Record cutoffs separately if a judgment also needs to reproduce the class.
+
 A score and the stats are cacheable on their inputs and hang from the model's two golden threads,
 `urn:bayes:{model}:train` and `urn:bayes:{model}:untrain`, which the kernel cuts after every write
 through them. So a score is served from the cache until that model learns or forgets something,

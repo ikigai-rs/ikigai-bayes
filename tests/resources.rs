@@ -89,7 +89,7 @@ fn stats_recompute_after_training() {
     assert_ne!(before, after);
     assert_eq!(
         after,
-        "model contact\nmessages spam 0 ham 1\ntokens 9\ncutoffs ham 0.2 spam 0.9\ntokenizer 1\n"
+        "model contact\nmessages spam 0 ham 1\ntokens 9\ncutoffs ham 0.2 spam 0.9\ntokenizer 1\nmodelDigest b3:2f2ce99c9621517a5b3b779e96b5b4d821ba4790ff5e88e1410dcd942a01ed16\n"
     );
 }
 
