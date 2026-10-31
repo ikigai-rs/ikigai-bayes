@@ -13,7 +13,7 @@ use ikigai_core::{
 };
 use serde_json::json;
 
-use crate::model::{Change, Label, Score};
+use crate::model::{Change, Label, Labels, Score};
 use crate::store::Store;
 use crate::tokenize::{FIELDS, TOKENIZER_VERSION};
 use crate::{
@@ -186,6 +186,20 @@ fn hang_from_model(inv: &Invocation<'_>, model: &str) {
     inv.depends_on(model_iri(model, "untrain"));
 }
 
+// Keep dynamic label keys sorted, including with serde_json's preserve_order feature.
+fn named_pair<T: serde::Serialize>(
+    labels: &Labels,
+    high: T,
+    low: T,
+) -> std::collections::BTreeMap<&str, T> {
+    [
+        (labels.name(Label::Spam), high),
+        (labels.name(Label::Ham), low),
+    ]
+    .into_iter()
+    .collect()
+}
+
 // --- score --------------------------------------------------------------------------------
 
 /// The most clues `clues=` may ask to be shown: every clue a score can combine.
@@ -200,7 +214,7 @@ fn score(slot: Arc<Slot>) -> FnEndpoint {
                 .summary(
                     "Scores a message with Robinson's per-token probabilities combined by \
                      Fisher's chi-squared method (SpamBayes): a score in [0, 1], its class \
-                     (`spam` at or above the spam cutoff, `ham` below the ham cutoff, `unsure` \
+                     (the high label at or above its cutoff, the low label below its cutoff, `unsure` \
                      between) and the strongest clues. Cacheable until the model is trained or \
                      untrained.",
                 )
@@ -249,7 +263,7 @@ fn score(slot: Arc<Slot>) -> FnEndpoint {
         let body = match face {
             JSON => score_json(&slot, &digest, &score, shown),
             TURTLE => score_turtle(&slot, &digest, &score, shown),
-            _ => score_text(&digest, &score, shown),
+            _ => score_text(&slot, &digest, &score, shown),
         };
         Ok(answer(face, body).cacheable())
     })
@@ -258,11 +272,12 @@ fn score(slot: Arc<Slot>) -> FnEndpoint {
 
 /// The text face: `<class> <score>`, the digest, `clues <shown> of <combined>`, then one
 /// `<probability> <token>` line per clue shown, strongest first.
-fn score_text(digest: &ContentId, score: &Score, shown: usize) -> String {
+fn score_text(slot: &Slot, digest: &ContentId, score: &Score, shown: usize) -> String {
     let mut out = format!(
-        "{} {:.6}\ndigest {digest}\nclues {} of {}\n",
-        score.class.as_str(),
+        "{} {:.6}\ndigest {digest}\nmodelDigest {}\nclues {} of {}\n",
+        slot.labels.class(score.class),
         score.score,
+        score.model_digest,
         shown.min(score.clues.len()),
         score.clues.len()
     );
@@ -280,12 +295,13 @@ fn score_json(slot: &Slot, digest: &ContentId, score: &Score, shown: usize) -> S
         .map(|c| json!({"probability": c.probability, "token": c.token}))
         .collect();
     json!({
-        "class": score.class.as_str(),
+        "class": slot.labels.class(score.class),
         "clueCount": score.clues.len(),
         "clues": clues,
-        "cutoffs": {"ham": slot.settings.ham_cutoff, "spam": slot.settings.spam_cutoff},
+        "cutoffs": named_pair(&slot.labels, slot.settings.spam_cutoff, slot.settings.ham_cutoff),
         "digest": digest.to_string(),
         "model": slot.name,
+        "modelDigest": score.model_digest.to_string(),
         "score": score.score,
         "tokenizer": TOKENIZER_VERSION,
     })
@@ -309,16 +325,19 @@ fn score_turtle(slot: &Slot, digest: &ContentId, score: &Score, shown: usize) ->
          schema:worstRating \"0\"^^xsd:decimal ;\n  \
          schema:bestRating \"1\"^^xsd:decimal ;\n  \
          schema:category \"{}\" ;\n  \
-         schema:ratingExplanation \"ham below {}, spam at or above {}; {} clue(s) combined\" ;\n  \
+         schema:ratingExplanation \"{} below {}, {} at or above {}; {} clue(s) combined\" ;\n  \
          dcterms:identifier \"{digest}\" ;\n  \
          prov:wasDerivedFrom <{}>",
         score.score,
-        score.class.as_str(),
+        slot.labels.class(score.class),
+        slot.labels.name(Label::Ham),
         slot.settings.ham_cutoff,
+        slot.labels.name(Label::Spam),
         slot.settings.spam_cutoff,
         score.clues.len(),
         model_iri(&slot.name, "stats"),
     ));
+    out.push_str(&format!(" ;\n  schema:version \"{}\"", score.model_digest));
     let clues: Vec<_> = score.clues.iter().take(shown).collect();
     let iri = |token: &str| format!("{subject}:clue:{}", encode(token));
     if !clues.is_empty() {
@@ -396,7 +415,7 @@ fn train_door(store: Arc<dyn Store>, slot: Arc<Slot>) -> FnEndpoint {
                 ArgSpec::new("label")
                     .summary("what the message is")
                     .class(xsd("string"))
-                    .one_of(["spam", "ham"]),
+                    .one_of([slot.labels.name(Label::Spam), slot.labels.name(Label::Ham)]),
             ]
             .into_iter()
             .chain(field_specs())
@@ -408,42 +427,58 @@ fn train_door(store: Arc<dyn Store>, slot: Arc<Slot>) -> FnEndpoint {
         let face = face(inv, &PLAIN_FACES)?;
         let message = message(inv)?;
         let label_text = inv.inline_str("label")?;
-        let label = Label::parse(label_text.trim()).ok_or_else(|| Error::InvalidArgument {
-            name: "label".into(),
-            detail: format!("`{label_text}` is not `spam` or `ham`"),
-        })?;
+        let label = slot
+            .labels
+            .parse(label_text.trim())
+            .ok_or_else(|| Error::InvalidArgument {
+                name: "label".into(),
+                detail: format!(
+                    "`{label_text}` is not `{}` or `{}`",
+                    slot.labels.name(Label::Spam),
+                    slot.labels.name(Label::Ham)
+                ),
+            })?;
         let done = train(store.as_ref(), &slot, &message, label)?;
         let (change, previous) = match done.change {
             Change::Added => ("added", None),
-            Change::Moved { from } => ("moved", Some(from.as_str())),
+            Change::Moved { from } => ("moved", Some(slot.labels.name(from))),
             Change::Unchanged => ("unchanged", None),
         };
         let body = if face == JSON {
             json!({
                 "change": change,
                 "digest": done.digest.to_string(),
-                "label": done.label.as_str(),
-                "messages": {"ham": done.messages.1, "spam": done.messages.0},
+                "label": slot.labels.name(done.label),
+                "messages": named_pair(&slot.labels, done.messages.0, done.messages.1),
                 "model": slot.name,
                 "previous": previous,
             })
             .to_string()
         } else {
             let what = match done.change {
-                Change::Added => format!("added {} as {}", done.digest, done.label.as_str()),
+                Change::Added => {
+                    format!("added {} as {}", done.digest, slot.labels.name(done.label))
+                }
                 Change::Moved { from } => format!(
                     "moved {} from {} to {}",
                     done.digest,
-                    from.as_str(),
-                    done.label.as_str()
+                    slot.labels.name(from),
+                    slot.labels.name(done.label)
                 ),
                 Change::Unchanged => {
-                    format!("unchanged {}: already {}", done.digest, done.label.as_str())
+                    format!(
+                        "unchanged {}: already {}",
+                        done.digest,
+                        slot.labels.name(done.label)
+                    )
                 }
             };
             format!(
-                "{what}\nmessages spam {} ham {}\n",
-                done.messages.0, done.messages.1
+                "{what}\nmessages {} {} {} {}\n",
+                slot.labels.name(Label::Spam),
+                done.messages.0,
+                slot.labels.name(Label::Ham),
+                done.messages.1
             )
         };
         Ok(answer(face, body))
@@ -510,17 +545,19 @@ fn untrain_door(store: Arc<dyn Store>, slot: Arc<Slot>) -> FnEndpoint {
         let body = if face == JSON {
             json!({
                 "digest": done.digest.to_string(),
-                "messages": {"ham": done.messages.1, "spam": done.messages.0},
+                "messages": named_pair(&slot.labels, done.messages.0, done.messages.1),
                 "model": slot.name,
-                "removed": done.label.as_str(),
+                "removed": slot.labels.name(done.label),
             })
             .to_string()
         } else {
             format!(
-                "removed {} (was {})\nmessages spam {} ham {}\n",
+                "removed {} (was {})\nmessages {} {} {} {}\n",
                 done.digest,
-                done.label.as_str(),
+                slot.labels.name(done.label),
+                slot.labels.name(Label::Spam),
                 done.messages.0,
+                slot.labels.name(Label::Ham),
                 done.messages.1
             )
         };
@@ -538,7 +575,7 @@ fn stats(slot: Arc<Slot>) -> FnEndpoint {
             Description::new(format!("bayes-{name}-stats"))
                 .title(format!("The `{name}` model's counts"))
                 .summary(
-                    "The model's trained messages (spam and ham), its distinct tokens, its \
+                    "The model's trained messages by label, its distinct tokens, its \
                      cutoffs and the tokenizer version it was trained with. Cacheable until the \
                      model is trained or untrained.",
                 )
@@ -551,25 +588,26 @@ fn stats(slot: Arc<Slot>) -> FnEndpoint {
     );
     FnEndpoint::new(format!("bayes-{name}-stats"), move |inv| {
         let face = face(inv, &PLAIN_FACES)?;
-        let (nspam, nham, tokens) = {
+        let (nspam, nham, tokens, model_digest) = {
             let model = slot.model.lock().expect("model lock");
-            (model.nspam(), model.nham(), model.distinct_tokens())
+            (model.nspam(), model.nham(), model.distinct_tokens(), model.digest())
         };
         hang_from_model(inv, &slot.name);
         let s = &slot.settings;
         let body = if face == JSON {
             json!({
-                "cutoffs": {"ham": s.ham_cutoff, "spam": s.spam_cutoff},
-                "messages": {"ham": nham, "spam": nspam},
+                "cutoffs": named_pair(&slot.labels, s.spam_cutoff, s.ham_cutoff),
+                "messages": named_pair(&slot.labels, nspam, nham),
                 "model": slot.name,
+                "modelDigest": model_digest.to_string(),
                 "tokenizer": TOKENIZER_VERSION,
                 "tokens": tokens,
             })
             .to_string()
         } else {
             format!(
-                "model {}\nmessages spam {nspam} ham {nham}\ntokens {tokens}\ncutoffs ham {} spam {}\ntokenizer {TOKENIZER_VERSION}\n",
-                slot.name, s.ham_cutoff, s.spam_cutoff
+                "model {}\nmessages {} {nspam} {} {nham}\ntokens {tokens}\ncutoffs {} {} {} {}\ntokenizer {TOKENIZER_VERSION}\nmodelDigest {model_digest}\n",
+                slot.name, slot.labels.name(Label::Spam), slot.labels.name(Label::Ham), slot.labels.name(Label::Ham), s.ham_cutoff, slot.labels.name(Label::Spam), s.spam_cutoff
             )
         };
         Ok(answer(face, body).cacheable())

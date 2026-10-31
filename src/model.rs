@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::sync::OnceLock;
 
 use ikigai_core::ContentId;
 use serde::{Deserialize, Serialize};
@@ -85,6 +86,90 @@ impl Label {
     }
 }
 
+/// The names for the high-score and low-score sides, respectively.
+/// Internal `Label::Spam`/`Label::Ham` remain stable storage slots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "LabelNames")]
+pub struct Labels {
+    high: String,
+    low: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LabelNames {
+    high: String,
+    low: String,
+}
+
+impl TryFrom<LabelNames> for Labels {
+    type Error = String;
+
+    fn try_from(names: LabelNames) -> Result<Self, Self::Error> {
+        Self::new(names.high, names.low)
+    }
+}
+
+impl Default for Labels {
+    fn default() -> Self {
+        Self {
+            high: "spam".into(),
+            low: "ham".into(),
+        }
+    }
+}
+
+impl Labels {
+    /// Two distinct names, using lowercase letters, digits and single hyphens.
+    /// `unsure` is reserved for the band between the cutoffs.
+    pub fn new(high: impl Into<String>, low: impl Into<String>) -> Result<Self, String> {
+        let labels = Self {
+            high: high.into(),
+            low: low.into(),
+        };
+        if [&labels.high, &labels.low]
+            .iter()
+            .any(|s| !crate::is_model_name(s) || s.as_str() == "unsure")
+            || labels.high == labels.low
+        {
+            return Err("labels must be distinct lowercase names (1 to 40 characters); `unsure` and `models` are reserved".into());
+        }
+        Ok(labels)
+    }
+
+    /// The public name for an internal training slot.
+    pub fn name(&self, label: Label) -> &str {
+        match label {
+            Label::Spam => &self.high,
+            Label::Ham => &self.low,
+        }
+    }
+
+    /// Parse one of this model's two names.
+    pub fn parse(&self, text: &str) -> Option<Label> {
+        if text == self.high {
+            Some(Label::Spam)
+        } else if text == self.low {
+            Some(Label::Ham)
+        } else {
+            None
+        }
+    }
+
+    /// The public class name, including the reserved `unsure` class.
+    pub fn class(&self, class: Class) -> &str {
+        match class {
+            Class::Spam => &self.high,
+            Class::Ham => &self.low,
+            Class::Unsure => "unsure",
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// What a train did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Change {
@@ -142,14 +227,28 @@ struct Trained {
 type Counts = (u64, u64);
 
 /// A model.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Model {
     name: String,
+    labels: Labels,
     messages: BTreeMap<ContentId, Trained>,
     counts: HashMap<String, Counts>,
     nspam: u64,
     nham: u64,
+    digest: OnceLock<ContentId>,
 }
+
+impl PartialEq for Model {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.labels == other.labels
+            && self.messages == other.messages
+            && self.counts == other.counts
+            && self.nspam == other.nspam
+            && self.nham == other.nham
+    }
+}
+impl Eq for Model {}
 
 /// One clue of a score: a token and its probability.
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +264,8 @@ pub struct Clue {
 pub struct Score {
     /// Fisher's combined score, in `[0, 1]`.
     pub score: f64,
+    /// Digest of the trained state used for this score.
+    pub model_digest: ContentId,
     /// The class under the model's cutoffs.
     pub class: Class,
     /// Every clue combined, strongest first (furthest from 0.5; ties by token).
@@ -179,6 +280,8 @@ struct File {
     version: u32,
     model: String,
     tokenizer: String,
+    #[serde(default, skip_serializing_if = "Labels::is_default")]
+    labels: Labels,
     messages: Vec<FileMessage>,
 }
 
@@ -195,11 +298,35 @@ impl Model {
     pub fn new(name: impl Into<String>) -> Self {
         Model {
             name: name.into(),
+            labels: Labels::default(),
             messages: BTreeMap::new(),
             counts: HashMap::new(),
             nspam: 0,
             nham: 0,
+            digest: OnceLock::new(),
         }
+    }
+
+    /// An empty model with declared high-score and low-score labels.
+    pub fn with_labels(name: impl Into<String>, labels: Labels) -> Self {
+        Self {
+            labels,
+            ..Self::new(name)
+        }
+    }
+
+    /// The model's declared labels.
+    pub fn labels(&self) -> &Labels {
+        &self.labels
+    }
+
+    /// A deterministic BLAKE3 digest of the trained state, excluding the model name.
+    /// No-op training and reads leave it unchanged; exact untraining restores prior digests.
+    /// The encoding is the model file with an empty model name, including tokenizer and labels.
+    pub fn digest(&self) -> ContentId {
+        *self
+            .digest
+            .get_or_init(|| ContentId::of(&self.file_bytes("")))
     }
 
     /// The model's name.
@@ -247,6 +374,7 @@ impl Model {
             }
             // A move: the same message under the other label. Its tokens are the ones it was
             // trained with, so the move adds no token and needs no bound.
+            self.digest.take();
             let trained = self.messages.remove(&digest).expect("present");
             self.add_counts(&trained.tokens, previous, -1);
             self.add_counts(&trained.tokens, label, 1);
@@ -272,6 +400,7 @@ impl Model {
                 new,
             });
         }
+        self.digest.take();
         let tokens: Vec<String> = tokens.iter().cloned().collect();
         self.add_counts(&tokens, label, 1);
         self.messages.insert(digest, Trained { label, tokens });
@@ -282,6 +411,7 @@ impl Model {
     /// The label it had, or `None` when it was not trained.
     pub fn untrain(&mut self, digest: &ContentId) -> Option<Label> {
         let trained = self.messages.remove(digest)?;
+        self.digest.take();
         self.add_counts(&trained.tokens, trained.label, -1);
         Some(trained.label)
     }
@@ -304,6 +434,7 @@ impl Model {
 
     /// Re-teach a message removed by [`untrain`](Self::untrain) (used when persisting it failed).
     pub(crate) fn restore(&mut self, digest: ContentId, label: Label, tokens: Vec<String>) {
+        self.digest.take();
         self.add_counts(&tokens, label, 1);
         self.messages.insert(digest, Trained { label, tokens });
     }
@@ -360,6 +491,7 @@ impl Model {
         let score = fisher(&probabilities);
         Score {
             score,
+            model_digest: self.digest(),
             class: settings.class_of(score),
             clues,
         }
@@ -367,11 +499,16 @@ impl Model {
 
     /// The model file's bytes: deterministic (messages sorted by digest, tokens sorted).
     pub fn to_bytes(&self) -> Vec<u8> {
+        self.file_bytes(&self.name)
+    }
+
+    fn file_bytes(&self, name: &str) -> Vec<u8> {
         let file = File {
             format: FORMAT.to_string(),
             version: FORMAT_VERSION,
-            model: self.name.clone(),
+            model: name.to_owned(),
             tokenizer: TOKENIZER_VERSION.to_string(),
+            labels: self.labels.clone(),
             messages: self
                 .messages
                 .iter()
@@ -422,7 +559,7 @@ impl Model {
                 file.messages.len()
             ));
         }
-        let mut model = Model::new(name);
+        let mut model = Model::with_labels(name, file.labels);
         for m in file.messages {
             let digest = ContentId::parse(&m.digest)
                 .map_err(|e| format!("message digest `{}`: {e}", m.digest))?;

@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-bayes"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 # `std::fs::File::try_lock`, which keeps one writer per state directory, is stable from 1.89;
 # the shared CI's msrv job builds and tests on this line.
