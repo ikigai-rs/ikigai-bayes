@@ -1,5 +1,7 @@
 //! The state directory: a model survives the host, a missing or corrupt model is refused by
-//! name, only a new model starts empty, and one writer holds a directory.
+//! name, only a new model starts empty, and one writer holds a directory. Since Hypothesis H
+//! (ledger #2384) the directory is reached through a private `urn:file:` mount, so these tests
+//! are also the proof that the resources answer what the files did.
 
 mod common;
 
@@ -21,8 +23,13 @@ fn a_new_model_is_created_and_registered_at_open() {
         std::fs::read_to_string(s.path().join("models")).unwrap(),
         "contact\n"
     );
-    // Nothing left behind by the atomic writes.
-    assert!(!s.path().join("contact.json.tmp").exists());
+    // Nothing left behind by the atomic writes: no staging file beside the three names.
+    let mut names: Vec<String> = std::fs::read_dir(s.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["LOCK", "contact.json", "models"]);
 }
 
 #[test]
@@ -113,8 +120,12 @@ fn a_failed_write_changes_nothing() {
     let k = kernel(&bayes);
     train(&k, "contact", "lunch on tuesday", "ham");
     let before = text(&k, Verb::Source, "urn:bayes:contact:stats", &[]);
-    // A directory where the temp file must go makes the atomic write fail.
-    std::fs::create_dir(s.path().join("contact.json.tmp")).unwrap();
+    // A directory where the model's file must go makes the write fail (a rename cannot
+    // replace a directory with a file). The file is set aside, and put back after.
+    let file = s.path().join("contact.json");
+    let aside = s.path().join("contact.aside");
+    std::fs::rename(&file, &aside).unwrap();
+    std::fs::create_dir(&file).unwrap();
     let err = issue(
         &k,
         Verb::Sink,
@@ -123,7 +134,8 @@ fn a_failed_write_changes_nothing() {
     )
     .unwrap_err();
     assert!(matches!(err, ikigai_core::Error::Endpoint(_)), "{err:?}");
-    std::fs::remove_dir(s.path().join("contact.json.tmp")).unwrap();
+    std::fs::remove_dir(&file).unwrap();
+    std::fs::rename(&aside, &file).unwrap();
     assert_eq!(
         text(&k, Verb::Source, "urn:bayes:contact:stats", &[]),
         before
@@ -140,4 +152,68 @@ fn a_failed_write_changes_nothing() {
         ),
         before
     );
+}
+
+/// The same models through a `urn:file:` mount the HOST binds, at a base of its choosing: what
+/// `DirStore` writes is what a `ResourceStore` over that directory reads, byte for byte.
+#[test]
+fn a_resource_store_reads_what_the_state_directory_wrote() {
+    use ikigai_bayes::store::{ResourceStore, Store};
+    use ikigai_core::{Capability, Kernel};
+    use std::sync::Arc;
+
+    let s = Scratch::new();
+    let dir = s.path().join("state");
+    let stats = {
+        let bayes = open(&dir).unwrap();
+        let k = kernel(&bayes);
+        train(&k, "contact", "cheap pills buy now", "spam");
+        text(&k, Verb::Source, "urn:bayes:contact:stats", &[])
+    };
+    let on_disk = std::fs::read(dir.join("contact.json")).unwrap();
+
+    // The host's mount is jailed one level up, so the models live under `urn:file:state/`.
+    let files = Arc::new(Kernel::new(Arc::new(ikigai_fs::space(s.path()))));
+    let store = ResourceStore::open(files, "urn:file:state/", Capability::root()).unwrap();
+    assert_eq!(store.load("contact").unwrap(), Some(on_disk));
+    assert_eq!(store.load("other").unwrap(), None, "never created: new");
+
+    let bayes = Bayes::with_store(Arc::new(store), [ModelConfig::new("contact")]).unwrap();
+    let k = kernel(&bayes);
+    assert_eq!(
+        text(&k, Verb::Source, "urn:bayes:contact:stats", &[]),
+        stats
+    );
+    // A train through it lands in the same file.
+    train(&k, "contact", "lunch on tuesday", "ham");
+    assert!(text(&k, Verb::Source, "urn:bayes:contact:stats", &[]).contains("spam 1 ham 1"));
+    drop(k);
+    drop(bayes);
+    let reopened = open(&dir).unwrap();
+    assert!(text(
+        &kernel(&reopened),
+        Verb::Source,
+        "urn:bayes:contact:stats",
+        &[]
+    )
+    .contains("spam 1 ham 1"));
+}
+
+/// The store writes only under the capability it was handed: a read-only grant reads the
+/// models, and a train is refused rather than written around the grant.
+#[test]
+fn a_resource_store_writes_only_what_its_capability_grants() {
+    use ikigai_bayes::store::{ResourceStore, Store};
+    use ikigai_core::{Capability, Kernel};
+    use std::sync::Arc;
+
+    let s = Scratch::new();
+    drop(open(s.path()).unwrap());
+    let root = s.path().to_str().expect("a UTF-8 scratch path");
+    let files = Arc::new(Kernel::new(Arc::new(ikigai_fs::space(s.path()))));
+    let read_only = Capability::scoped([format!("urn:cap:fs:read:{root}")]);
+    let store = ResourceStore::open(files, "urn:file:", read_only).unwrap();
+    assert!(store.load("contact").unwrap().is_some());
+    let err = store.save("contact", b"{}").unwrap_err().to_string();
+    assert!(err.contains("write urn:file:contact.json"), "{err}");
 }
