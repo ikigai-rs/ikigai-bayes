@@ -211,7 +211,12 @@ fn failed_moves_and_untraining_preserve_the_state_digest() {
     let k = kernel(&bayes);
     train(&k, "question", "announcement", "spam");
     let before = json(&k, "question", "stats", &[]);
-    std::fs::create_dir(s.path().join("question.json.tmp")).unwrap();
+    // A directory where the model's file must go makes every write fail (a rename cannot
+    // replace a directory with a file); the file is set aside, and put back after.
+    let file = s.path().join("question.json");
+    let aside = s.path().join("question.aside");
+    std::fs::rename(&file, &aside).unwrap();
+    std::fs::create_dir(&file).unwrap();
     assert!(issue(
         &k,
         Verb::Sink,
@@ -232,5 +237,6 @@ fn failed_moves_and_untraining_preserve_the_state_digest() {
         json(&k, "question", "score", &[("content", "announcement")])["modelDigest"],
         before["modelDigest"]
     );
-    std::fs::remove_dir(s.path().join("question.json.tmp")).unwrap();
+    std::fs::remove_dir(&file).unwrap();
+    std::fs::rename(&aside, &file).unwrap();
 }

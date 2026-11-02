@@ -155,15 +155,21 @@ The **state directory is the host's**: no environment variable, no hidden path u
 
 - A model **is** the set of messages it was taught (digest, label, token set); the counts are
   derived from that set when it is read. So counts cannot drift, and untraining is exact.
-- **Writes are atomic** (a temporary file, synced, renamed over the old one), and a train is
-  answered only after its write lands; a failed write leaves memory and disk as they were.
+- **The classifier never opens a model file itself.** `Bayes::open` reads and writes the
+  directory through a private `urn:file:` mount ([ikigai-fs](https://github.com/ikigai-rs/ikigai-fs))
+  jailed to it; the one file access the crate makes is the directory's `LOCK`. A host that already
+  binds its files as resources passes `store::ResourceStore` (a kernel, a base IRI such as
+  `urn:file:bayes/`, and a capability) to `Bayes::with_store` instead.
+- **Writes are atomic** (the jail's Sink stages the bytes, syncs them and renames them over the old
+  file), and a train is answered only after its write lands; a failed write leaves memory and disk
+  as they were.
 - **Missing or corrupt is refused by name.** Only a NEW model (not in the registry, no file)
   starts empty. A registered model whose file is gone, a file that does not parse, another model's
   file, or one trained by another tokenizer version stops the host at open.
 - ⚠ The state holds the token set of every trained message (that is what makes untraining by
   digest exact), so it is as sensitive as a bag of words of those messages. Keep it private.
 
-`store::Store` is a small trait; the directory store is not built for `wasm32`, and the classifier,
+`store::Store` is a small trait; the directory and resource stores are not built for `wasm32`, and the classifier,
 the tokenizer and the in-memory store are (`Bayes::in_memory`). CI runs `clippy --lib` on
 `wasm32-unknown-unknown`.
 
