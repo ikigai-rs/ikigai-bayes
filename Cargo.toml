@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-bayes"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 # `std::fs::File::try_lock`, which keeps one writer per state directory, is stable from 1.89;
 # the shared CI's msrv job builds and tests on this line.
@@ -21,13 +21,9 @@ categories = ["text-processing", "wasm"]
 exclude = ["scripts/"]
 
 [dependencies]
-# The published kernel, the SAME one the hosts link. **0.2.0 is the streams release**
-# (ledger #2261). The old `"0.1.103"` pin was a RANGE, `>=0.1.103, <0.2.0` under 0.x rules, so
-# it could never reach 0.2; core's types are in this crate's API, which is why this crate moved
-# to 0.2.0 with it. The API this crate calls (`Invocation::depends_on`, `ContentId`) is
-# unchanged in 0.2.0.
-# ⚠ `"0.2.0"` is `<0.3.0`: when core reaches 0.3 this line must move or the crate freezes out.
-ikigai-core = "0.2.0"
+# Core 0.3 scopes held content to its deliverer (ledger #2965). Its types are part of
+# this crate's public API, so this release moves to core 0.3 with the hosts.
+ikigai-core = "0.3.0"
 # The persisted model file and the `application/json` faces. Both are wasm-clean.
 # serde_json's parser refuses nesting past 128 levels by default, which is the only recursive
 # parse in this crate (a model file it wrote itself); request input is never parsed recursively.
@@ -38,28 +34,17 @@ serde_json = "1"
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # `DirStore` keeps its models through a private `urn:file:` mount jailed to the state directory,
 # so this crate never opens a model file itself (Hypothesis H, ledger #2384): the jail does, and
-# its Sink stages, syncs and renames, the atomic write this crate used to hand-roll. 0.3.0 is the
-# release tested here; it needs core 0.2.3, which raises this crate's effective core floor.
-# ⚠ `"0.3.0"` is `<0.4.0`: raise it when ikigai-fs moves.
-ikigai-fs = "0.3.0"
+# its Sink stages, syncs and renames. Version 0.4 uses core 0.3's scoped content store.
+ikigai-fs = "0.4.0"
 # `block_on`: a `Store` is synchronous, and `ResourceStore` drives each kernel request to
 # completion on a short-lived thread of its own (never nested inside the caller's executor).
 futures-executor = "0.3"
 
 [dev-dependencies]
-# The module recipe as one test. **0.12.0 is the current published definition of "done"**, on
-# core 0.2.0. 0.9 added core 0.1.105's contract-shape checks (REQUIRED probes input groups,
-# OUTPUTS honors `output_from`, PIPELINE's named-only line, VALIDATE refuses a default on a
-# binding) and RECOMPUTE; 0.10 added FAILURES behind `Suite::check_failures()`; 0.11 turns
-# FAILURES and DATATYPES on by default; 0.12 turns on BODIES (given the kernel's space through
-# `Suite::body_space`) and BODY-INPUTS (no argument here is `reads_body`, so nothing to probe).
-# `Suite::required_on_mutating` (0.8.0) still holds `train` to REQUIRED.
-# ⚠ `"0.12.0"` is `<0.13.0`: raise it when conformance moves, or this crate keeps reporting
-# green against an old rulebook.
-ikigai-conformance = "0.12.0"
-# `TurtleRenderer` gives the test kernels a JSON Meta face (without one the engine's routing
-# cannot be observed). One workspace with core, so it moves with core: 0.2.0 is the streams
-# release (ledger #2261); the old `"0.1.103"` meant `<0.2.0` under 0.x rules.
-ikigai-vocab = "0.2.0"
+# The module recipe on core 0.3, including the current conformance checks.
+ikigai-conformance = "0.14.0"
+# `TurtleRenderer` gives the test kernels a JSON Meta face. Keep it on core 0.3
+# for the scoped content store (ledger #2965), matching the library's core types.
+ikigai-vocab = "0.3.0"
 # `block_on` for tests, doctests and the example: the crate itself spawns nothing.
 futures = "0.3"
