@@ -160,7 +160,23 @@ pub fn chi2q(chi2: f64, v: usize) -> f64 {
         "chi2q takes an even number of degrees of freedom"
     );
     let m = chi2 / 2.0;
+    if m == f64::INFINITY {
+        return 0.0;
+    }
     let mut term = (-m).exp();
+    if term < f64::MIN_POSITIVE {
+        // The first term can underflow even when later terms carry substantial mass.
+        // Sum in log space in that case, including subnormal starts whose relative error
+        // would otherwise be amplified by the recurrence.
+        let mut log_term = -m;
+        let mut log_sum = log_term;
+        for i in 1..v / 2 {
+            log_term += (m / i as f64).ln();
+            let largest = log_sum.max(log_term);
+            log_sum = largest + (-(log_sum - log_term).abs()).exp().ln_1p();
+        }
+        return log_sum.exp().min(1.0);
+    }
     let mut sum = term;
     for i in 1..v / 2 {
         term *= m / i as f64;
