@@ -160,7 +160,23 @@ pub fn chi2q(chi2: f64, v: usize) -> f64 {
         "chi2q takes an even number of degrees of freedom"
     );
     let m = chi2 / 2.0;
+    if m == f64::INFINITY {
+        return 0.0;
+    }
     let mut term = (-m).exp();
+    if term < f64::MIN_POSITIVE {
+        // The first term can underflow even when later terms carry substantial mass.
+        // Sum in log space in that case, including subnormal starts whose relative error
+        // would otherwise be amplified by the recurrence.
+        let mut log_term = -m;
+        let mut log_sum = log_term;
+        for i in 1..v / 2 {
+            log_term += (m / i as f64).ln();
+            let largest = log_sum.max(log_term);
+            log_sum = largest + (-(log_sum - log_term).abs()).exp().ln_1p();
+        }
+        return log_sum.exp().min(1.0);
+    }
     let mut sum = term;
     for i in 1..v / 2 {
         term *= m / i as f64;
@@ -219,6 +235,33 @@ mod tests {
         assert!(close(chi2q(6.0, 6), (-3.0f64).exp() * (1.0 + 3.0 + 4.5)));
         // Large χ² underflows to 0, never NaN.
         assert_eq!(chi2q(1e6, 4), 0.0);
+    }
+
+    #[test]
+    fn chi2q_retains_mass_when_the_first_term_underflows() {
+        // Q(2n, 2n), independently evaluated with an 80-digit Decimal series.
+        // Cover normal, subnormal, and zero initial terms around exp(-n)'s underflow.
+        for (n, want) in [
+            (708, 0.495_002_237_899_615_3),
+            (710, 0.495_009_282_074_890_9),
+            (720, 0.495_044_061_555_959_1),
+            (744, 0.495_124_652_497_847_93),
+            (750, 0.495_144_193_335_767_9),
+            (1000, 0.495_794_755_819_784_5),
+        ] {
+            let got = chi2q(2.0 * n as f64, 2 * n);
+            assert!((got - want).abs() < 1e-11, "n={n}: {got} != {want}");
+        }
+        assert_eq!(chi2q(f64::INFINITY, 300), 0.0);
+    }
+
+    #[test]
+    fn fisher_many_consistent_clues_do_not_become_unsure() {
+        // Public fisher accepts more clues than the endpoint's default limit of 150.
+        let high = fisher(&vec![0.68; 2000]);
+        let low = fisher(&vec![0.32; 2000]);
+        assert!(high > 0.999, "spam evidence became {high}");
+        assert!(low < 0.001, "ham evidence became {low}");
     }
 
     #[test]
