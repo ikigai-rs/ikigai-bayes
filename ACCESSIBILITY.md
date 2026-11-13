@@ -44,7 +44,7 @@ error kind is wrapped in (ikigai-core's `Display`); and any page that shows a sc
 ## How it is tested
 
 Every named check has a result: Pass, Fail or Blocked, with evidence. A Pass covers only
-its stated assertions, not overall accessibility. The checks below ran on 2026-11-13 (UTC)
+its stated assertions, not overall accessibility. The passing checks below ran on 2026-11-13 (UTC)
 on main commit `5b9420eb51905b3dfcc98e633e57f2a4461731fd`, before this documentation change,
 using Cargo 1.99.0 and rustc 1.99.0. `cargo test` runs these tests in CI through
 `.github/workflows/ci.yml`. No historical browser or assistive technology run is recorded.
