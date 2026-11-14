@@ -250,6 +250,8 @@
 //! ```
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_family = "wasm"))]
+pub mod at_rest;
 pub mod classify;
 mod endpoints;
 pub mod model;
@@ -547,6 +549,43 @@ impl Bayes {
         let store = store::DirStore::open(dir)
             .map_err(|e| OpenError(format!("state directory {}: {e}", dir.display())))?;
         Bayes::with_store(Arc::new(store), models)
+    }
+
+    /// [`Bayes::open`], with every model sealed at rest to `key` (see [`at_rest`]): what is on
+    /// disk is age ciphertext, and a model that is plaintext is refused by name. To seal the
+    /// state of a host that wrote plaintext, open once with [`Bayes::open_sealed_with`] and
+    /// [`at_rest::Migration::Reseal`].
+    #[cfg(not(target_family = "wasm"))]
+    pub fn open_sealed(
+        state_dir: impl AsRef<std::path::Path>,
+        key: &at_rest::StateKey,
+        models: impl IntoIterator<Item = ModelConfig>,
+    ) -> Result<Bayes, OpenError> {
+        Bayes::open_sealed_with(state_dir, key, at_rest::Migration::None, models)
+    }
+
+    /// [`Bayes::open_sealed`], first sealing in place, with [`at_rest::Migration::Reseal`],
+    /// every model in the directory that is plaintext or sealed only to an older identity in
+    /// `key`. Every model is then read as `open_sealed` reads it.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn open_sealed_with(
+        state_dir: impl AsRef<std::path::Path>,
+        key: &at_rest::StateKey,
+        migration: at_rest::Migration,
+        models: impl IntoIterator<Item = ModelConfig>,
+    ) -> Result<Bayes, OpenError> {
+        let dir = state_dir.as_ref();
+        let in_dir =
+            |e: store::StoreError| OpenError(format!("state directory {}: {e}", dir.display()));
+        let store = store::DirStore::open(dir).map_err(in_dir)?;
+        let sealed = at_rest::SealedStore::new(Arc::new(store), key);
+        let models: Vec<ModelConfig> = models.into_iter().collect();
+        if migration == at_rest::Migration::Reseal {
+            sealed
+                .reseal(models.iter().map(ModelConfig::name))
+                .map_err(in_dir)?;
+        }
+        Bayes::with_store(Arc::new(sealed), models)
     }
 
     /// Open the models in memory: nothing survives the process.
