@@ -61,6 +61,13 @@ pub trait Store: Send + Sync {
 
     /// Replace a model's bytes atomically, creating (and registering) it if it is new.
     fn save(&self, model: &str, bytes: &[u8]) -> Result<(), StoreError>;
+
+    /// Every model this store knows was created, whether or not a host offers it now: what
+    /// [`SealedStore::reseal`](crate::at_rest::SealedStore::reseal) walks. A store that keeps no
+    /// such list answers none, the default.
+    fn registered(&self) -> Result<Vec<String>, StoreError> {
+        Ok(Vec::new())
+    }
 }
 
 /// A store in memory: nothing survives the process. For tests and for a host with no disk.
@@ -88,6 +95,16 @@ impl Store for MemoryStore {
             .insert(model.to_string(), bytes.to_vec());
         Ok(())
     }
+
+    fn registered(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self
+            .models
+            .lock()
+            .expect("store lock")
+            .keys()
+            .cloned()
+            .collect())
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -105,6 +122,11 @@ mod resource {
 
     use super::{Store, StoreError};
     use crate::model::MAX_MODEL_BYTES;
+
+    /// The largest model resource read, in bytes: the model's own bound, and room for sealing
+    /// it at rest ([`crate::at_rest`]), which adds an age header (a few hundred bytes) and 16
+    /// bytes per 64 KiB chunk. The model inside is held to [`MAX_MODEL_BYTES`] when it is read.
+    const MAX_STORED_BYTES: usize = MAX_MODEL_BYTES + MAX_MODEL_BYTES / 4096 + 4096;
 
     /// The registry's name under the base.
     const REGISTRY: &str = "models";
@@ -207,9 +229,19 @@ mod resource {
             })
         }
 
+        /// Sink `bytes` to `iri`: as they are when they are UTF-8 text (a model or the
+        /// registry), and as `encoding=base64` when they are not (a sealed model).
         fn write(&self, iri: &Iri, bytes: &[u8]) -> Result<(), StoreError> {
-            let request = Request::new(Verb::Sink, iri.clone())
-                .with_arg("content", ArgRef::Inline(bytes.to_vec()));
+            let request = Request::new(Verb::Sink, iri.clone());
+            let request = if std::str::from_utf8(bytes).is_ok() {
+                request.with_arg("content", ArgRef::Inline(bytes.to_vec()))
+            } else {
+                use base64::Engine as _;
+                let text = base64::engine::general_purpose::STANDARD.encode(bytes);
+                request
+                    .with_arg("content", ArgRef::Inline(text.into_bytes()))
+                    .with_arg("encoding", ArgRef::Inline(b"base64".to_vec()))
+            };
             self.issue(request)
                 .map(drop)
                 .map_err(|e| StoreError(format!("write {}: {e}", iri.as_str())))
@@ -251,9 +283,9 @@ mod resource {
             };
             // The resource bounds what it answers (a kernel's run byte budget, 64 MiB by
             // default); this is the model's own bound.
-            if bytes.len() > MAX_MODEL_BYTES {
+            if bytes.len() > MAX_STORED_BYTES {
                 return Err(StoreError(format!(
-                    "{} is past the bound of {MAX_MODEL_BYTES} bytes",
+                    "{} is past the bound of {MAX_STORED_BYTES} bytes",
                     iri.as_str()
                 )));
             }
@@ -266,6 +298,16 @@ mod resource {
         fn save(&self, model: &str, bytes: &[u8]) -> Result<(), StoreError> {
             self.write(&self.model_iri(model)?, bytes)?;
             self.register(model)
+        }
+
+        fn registered(&self) -> Result<Vec<String>, StoreError> {
+            Ok(self
+                .registry
+                .lock()
+                .expect("registry lock")
+                .iter()
+                .cloned()
+                .collect())
         }
     }
 }
@@ -336,6 +378,10 @@ mod dir {
                 .save(model, bytes)
                 .map_err(|e| in_dir(&self.dir, e))
         }
+
+        fn registered(&self) -> Result<Vec<String>, StoreError> {
+            self.models.registered()
+        }
     }
 
     /// A resource error, saying which directory `urn:file:` is jailed to (the error itself
@@ -344,14 +390,14 @@ mod dir {
         StoreError(format!("{e} (urn:file: is {})", dir.display()))
     }
 
-    /// Create the directory if needed, then take `<dir>/LOCK` exclusively and write this
+    /// Create the directory `0700` if needed (and make it `0700` if it is not), then take `<dir>/LOCK` exclusively and write this
     /// process's id into it. The only file access this crate makes itself: `ikigai-fs` has no
     /// lock, and the one-writer rule is what keeps two processes from each training a copy of
     /// a model and losing the other's work.
     fn claim(dir: &Path) -> Result<File, StoreError> {
         // ambient: fs: creates the host-handed state directory, so the ikigai-fs jail has a root to open
         #[allow(clippy::disallowed_methods)]
-        let made = std::fs::create_dir_all(dir);
+        let made = private_dir(dir);
         made.map_err(|e| StoreError(format!("create {}: {e}", dir.display())))?;
         let path = dir.join(LOCK_FILE);
         // Never truncated on open: until the lock is ours, the pid in it is the holder's.
@@ -388,5 +434,26 @@ mod dir {
             .and_then(|()| file.flush())
             .map_err(|e| StoreError(format!("write {}: {e}", path.display())))?;
         Ok(file)
+    }
+
+    /// Create `dir` (and its missing parents), and on unix make `dir` itself `0700`: the files
+    /// the jail writes in it take the process's umask, so the directory is what closes them to
+    /// every other account.
+    fn private_dir(dir: &Path) -> std::io::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            builder.mode(0o700);
+            builder.create(dir)?;
+            let mode = std::fs::metadata(dir)?.permissions().mode() & 0o7777;
+            if mode != 0o700 {
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        builder.create(dir)
     }
 }

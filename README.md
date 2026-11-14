@@ -167,7 +167,38 @@ The **state directory is the host's**: no environment variable, no hidden path u
   starts empty. A registered model whose file is gone, a file that does not parse, another model's
   file, or one trained by another tokenizer version stops the host at open.
 - ⚠ The state holds the token set of every trained message (that is what makes untraining by
-  digest exact), so it is as sensitive as a bag of words of those messages. Keep it private.
+  digest exact), so it is as sensitive as a bag of words of those messages. `Bayes::open` makes
+  the state directory `0700`; seal it at rest as well (below).
+
+### Sealed at rest
+
+A host that keeps strangers' text (a public contact form, say) seals its models with a key it
+hands over, as `ikigai-layers` seals its state:
+
+```rust,ignore
+let key = ikigai_bayes::at_rest::StateKey::load(key_path)?;   // `age-keygen -o` writes one
+let bayes = ikigai_bayes::Bayes::open_sealed(
+    state_dir,
+    &key,
+    [ikigai_bayes::ModelConfig::new("contact")],
+)?;
+```
+
+- Each `<model>.json` is then one [age](https://age-encryption.org/v1) file (X25519), sealed to
+  the first identity in the key and opened with any of them. On disk there is no token in the
+  clear; the registry (`models`) holds only model names and stays plaintext.
+- A sealed model scores, counts and digests (`modelDigest`) exactly as it did unsealed: what is
+  sealed is the same model bytes.
+- **Reseal.** State a host wrote in plaintext is refused by name until it is opened once with
+  `Bayes::open_sealed_with(state_dir, &key, Migration::Reseal, models)`, which seals every
+  registered model in place, one atomic write each. The same call rotates a key: put the new
+  identity first and the old one after it, reseal once, then drop the old line.
+- A model sealed to a key the identity file does not hold is refused, never started empty. On
+  unix, a key file another account could read, or replace through its directory, is refused
+  with the `chmod` that fixes it.
+- `at_rest::SealedStore` seals any other `store::Store` (a `ResourceStore`, say) the same way.
+- Not covered: the running host, which holds the counts in memory to score, and anyone who
+  holds the key.
 
 `store::Store` is a small trait; the directory and resource stores are not built for `wasm32`, and the classifier,
 the tokenizer and the in-memory store are (`Bayes::in_memory`). CI runs `clippy --lib` on

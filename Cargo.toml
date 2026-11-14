@@ -39,6 +39,12 @@ ikigai-fs = "0.4.0"
 # `block_on`: a `Store` is synchronous, and `ResourceStore` drives each kernel request to
 # completion on a short-lived thread of its own (never nested inside the caller's executor).
 futures-executor = "0.3"
+# Sealing a model at rest (`at_rest`): age (X25519) through the ecosystem's one implementation
+# of it, the one ikigai-layers seals its state with. The library face only: no kernel, no armor.
+ikigai-encrypt = { version = "0.4.0", default-features = false }
+# A sealed model is binary: `ResourceStore` hands bytes that are not UTF-8 to a Sink as
+# `encoding=base64`, which `urn:file:` decodes back to the bytes it writes.
+base64 = "0.22"
 
 [dev-dependencies]
 # The module recipe on core 0.3, including the current conformance checks.
