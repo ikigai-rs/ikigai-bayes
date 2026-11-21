@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-bayes"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 # `std::fs::File::try_lock`, which keeps one writer per state directory, is stable from 1.89;
 # the shared CI's msrv job builds and tests on this line.
@@ -21,9 +21,9 @@ categories = ["text-processing", "wasm"]
 exclude = ["scripts/"]
 
 [dependencies]
-# Core 0.3 scopes held content to its deliverer (ledger #2965). Its types are part of
-# this crate's public API, so this release moves to core 0.3 with the hosts.
-ikigai-core = "0.3.0"
+# core 0.4.0 (scope opacity, structured denials; the cascade). Its types are part of this
+# crate's public API, so this release moves to core 0.4 with the hosts.
+ikigai-core = "0.4.0"
 # The persisted model file and the `application/json` faces. Both are wasm-clean.
 # serde_json's parser refuses nesting past 128 levels by default, which is the only recursive
 # parse in this crate (a model file it wrote itself); request input is never parsed recursively.
@@ -34,23 +34,24 @@ serde_json = "1"
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # `DirStore` keeps its models through a private `urn:file:` mount jailed to the state directory,
 # so this crate never opens a model file itself (Hypothesis H, ledger #2384): the jail does, and
-# its Sink stages, syncs and renames. Version 0.4 uses core 0.3's scoped content store.
-ikigai-fs = "0.4.0"
+# its Sink stages, syncs and renames. Version 0.6 is on core 0.4.0 (the cascade).
+ikigai-fs = "0.6.0"
 # `block_on`: a `Store` is synchronous, and `ResourceStore` drives each kernel request to
 # completion on a short-lived thread of its own (never nested inside the caller's executor).
 futures-executor = "0.3"
 # Sealing a model at rest (`at_rest`): age (X25519) through the ecosystem's one implementation
 # of it, the one ikigai-layers seals its state with. The library face only: no kernel, no armor.
-ikigai-encrypt = { version = "0.4.0", default-features = false }
+# Version 0.5 is on core 0.4.0 (the cascade).
+ikigai-encrypt = { version = "0.5.0", default-features = false }
 # A sealed model is binary: `ResourceStore` hands bytes that are not UTF-8 to a Sink as
 # `encoding=base64`, which `urn:file:` decodes back to the bytes it writes.
 base64 = "0.22"
 
 [dev-dependencies]
-# The module recipe on core 0.3, including the current conformance checks.
-ikigai-conformance = "0.14.0"
-# `TurtleRenderer` gives the test kernels a JSON Meta face. Keep it on core 0.3
-# for the scoped content store (ledger #2965), matching the library's core types.
-ikigai-vocab = "0.3.0"
+# The module recipe on core 0.4.0, including the current conformance checks.
+ikigai-conformance = "0.15.0"
+# `TurtleRenderer` gives the test kernels a JSON Meta face. core 0.4.0 (scope opacity,
+# structured denials; the cascade), matching the library's core types.
+ikigai-vocab = "0.4.0"
 # `block_on` for tests, doctests and the example: the crate itself spawns nothing.
 futures = "0.3"
