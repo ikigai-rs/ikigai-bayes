@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 use ikigai_core::ContentId;
 use serde::{Deserialize, Serialize};
 
-use crate::classify::{fisher, robinson, Class, Settings};
+use crate::classify::{fisher, robinson_with_strength, Class, Settings};
 use crate::tokenize::TOKENIZER_VERSION;
 
 /// The most messages one model may hold. Past it, training a NEW message is refused (a move or
@@ -470,23 +470,30 @@ impl Model {
 
     /// Score a message's token set.
     pub fn score(&self, tokens: &BTreeSet<String>, settings: &Settings) -> Score {
-        let mut clues: Vec<Clue> = tokens
+        let mut ranked: Vec<(f64, Clue)> = tokens
             .iter()
             .filter_map(|token| {
                 let (s, h) = self.counts(token);
-                let p = robinson(s, h, self.nspam, self.nham, settings);
-                ((p - 0.5).abs() >= settings.minimum_prob_strength).then(|| Clue {
-                    token: token.clone(),
-                    probability: p,
+                let (probability, strength) =
+                    robinson_with_strength(s, h, self.nspam, self.nham, settings);
+                (strength >= settings.minimum_prob_strength).then(|| {
+                    (
+                        strength,
+                        Clue {
+                            token: token.clone(),
+                            probability,
+                        },
+                    )
                 })
             })
             .collect();
-        clues.sort_by(|a, b| {
-            let da = (a.probability - 0.5).abs();
-            let db = (b.probability - 0.5).abs();
-            db.total_cmp(&da).then_with(|| a.token.cmp(&b.token))
+        ranked.sort_by(|(a_strength, a), (b_strength, b)| {
+            b_strength
+                .total_cmp(a_strength)
+                .then_with(|| a.token.cmp(&b.token))
         });
-        clues.truncate(settings.max_discriminators);
+        ranked.truncate(settings.max_discriminators);
+        let clues: Vec<Clue> = ranked.into_iter().map(|(_, clue)| clue).collect();
         let probabilities: Vec<f64> = clues.iter().map(|c| c.probability).collect();
         let score = fisher(&probabilities);
         Score {
@@ -804,5 +811,19 @@ mod tests {
         assert!(matches!(err, Refusal::TooManyTokens { .. }), "{err:?}");
         assert!(err.to_string().contains("refused, not pruned"));
         assert_eq!(m, before, "a refused train changes nothing");
+    }
+
+    #[test]
+    fn equally_strong_opposing_clues_tie_by_token_at_the_limit() {
+        let mut m = Model::new("m");
+        m.train(d("spam"), Label::Spam, &t("zebra")).unwrap();
+        m.train(d("ham"), Label::Ham, &t("apple")).unwrap();
+        let settings = Settings {
+            max_discriminators: 1,
+            ..Settings::default()
+        };
+        let score = m.score(&t("apple zebra"), &settings);
+        assert_eq!(score.clues[0].token, "apple");
+        assert_eq!(score.class, Class::Ham);
     }
 }
