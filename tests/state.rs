@@ -217,3 +217,55 @@ fn a_resource_store_writes_only_what_its_capability_grants() {
     let err = store.save("contact", b"{}").unwrap_err().to_string();
     assert!(err.contains("write urn:file:contact.json"), "{err}");
 }
+
+#[test]
+fn creation_journal_failure_leaves_registry_and_model_untouched() {
+    use ikigai_bayes::store::{DirStore, Store};
+    let s = Scratch::new();
+    let store = DirStore::open(s.path()).unwrap();
+    std::fs::create_dir(s.path().join("PENDING")).unwrap();
+    assert!(store.save("contact", b"model").is_err());
+    assert!(!s.path().join("models").exists());
+    assert!(!s.path().join("contact.json").exists());
+    std::fs::remove_dir(s.path().join("PENDING")).unwrap();
+    assert_eq!(store.load("contact").unwrap(), None);
+}
+
+#[test]
+fn creation_model_write_failure_is_completed_on_reopen() {
+    use ikigai_bayes::store::{DirStore, Store};
+    let s = Scratch::new();
+    let store = DirStore::open(s.path()).unwrap();
+    std::fs::create_dir(s.path().join("contact.json")).unwrap();
+    assert!(store.save("contact", b"model").is_err());
+    assert_eq!(
+        std::fs::read(s.path().join("models")).unwrap(),
+        b"contact\n"
+    );
+    assert!(s.path().join("PENDING").is_file());
+    drop(store);
+    assert!(DirStore::open(s.path()).is_err());
+    std::fs::remove_dir(s.path().join("contact.json")).unwrap();
+    let store = DirStore::open(s.path()).unwrap();
+    assert_eq!(store.load("contact").unwrap(), Some(b"model".to_vec()));
+    assert!(!s.path().join("PENDING").exists());
+    drop(store);
+    std::fs::remove_file(s.path().join("contact.json")).unwrap();
+    assert!(DirStore::open(s.path()).unwrap().load("contact").is_err());
+}
+
+#[test]
+fn uncommitted_creation_is_discarded_on_reopen() {
+    use ikigai_bayes::store::{DirStore, Store};
+    let s = Scratch::new();
+    let store = DirStore::open(s.path()).unwrap();
+    std::fs::create_dir(s.path().join("models")).unwrap();
+    assert!(store.save("contact", b"model").is_err());
+    drop(store);
+    std::fs::remove_dir(s.path().join("models")).unwrap();
+    let store = DirStore::open(s.path()).unwrap();
+    assert_eq!(store.load("contact").unwrap(), None);
+    assert!(!s.path().join("PENDING").exists());
+    store.save("contact", b"new").unwrap();
+    assert_eq!(store.load("contact").unwrap(), Some(b"new".to_vec()));
+}

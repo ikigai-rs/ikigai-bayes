@@ -23,12 +23,18 @@
 //! ```text
 //! <state>/LOCK              held exclusively for the store's life: one writer per directory
 //! <state>/models            the registry
+//! <state>/PENDING           a first creation awaiting recovery (only during a transaction)
 //! <state>/<model>.json      the model
 //! ```
 //!
 //! Every write is a Sink, so its atomicity is the resource's: `ikigai-fs` stages the bytes,
 //! syncs them and renames them over the file, so a crash leaves the old file or the new one,
-//! never half of one.
+//! never half of one. For a first `DirStore` save, a journal holds the model bytes before the
+//! registry is written. The registry write commits the creation: recovery discards the journal
+//! if the name is absent, or completes the model write if the name is present. A failed save
+//! after that commit can therefore finish on the next operation or open. Directory entries are
+//! synced on Unix. A generic `ResourceStore` has no such cross-resource transaction; its Sink
+//! provider must supply the needed guarantees when used directly.
 //!
 //! **Missing or corrupt is refused by name; only a NEW model starts empty.** A model is new when
 //! the registry does not list it and its resource is NotFound. A model the registry lists whose
@@ -207,12 +213,12 @@ mod resource {
             &self.base
         }
 
-        fn iri(&self, name: &str) -> Result<Iri, StoreError> {
+        pub(super) fn iri(&self, name: &str) -> Result<Iri, StoreError> {
             let iri = format!("{}{name}", self.base);
             Iri::parse(&iri).map_err(|e| StoreError(format!("`{iri}` is not an IRI: {e}")))
         }
 
-        fn model_iri(&self, model: &str) -> Result<Iri, StoreError> {
+        pub(super) fn model_iri(&self, model: &str) -> Result<Iri, StoreError> {
             self.iri(&format!("{model}.json"))
         }
 
@@ -231,7 +237,7 @@ mod resource {
 
         /// Sink `bytes` to `iri`: as they are when they are UTF-8 text (a model or the
         /// registry), and as `encoding=base64` when they are not (a sealed model).
-        fn write(&self, iri: &Iri, bytes: &[u8]) -> Result<(), StoreError> {
+        pub(super) fn write(&self, iri: &Iri, bytes: &[u8]) -> Result<(), StoreError> {
             let request = Request::new(Verb::Sink, iri.clone());
             let request = if std::str::from_utf8(bytes).is_ok() {
                 request.with_arg("content", ArgRef::Inline(bytes.to_vec()))
@@ -247,7 +253,7 @@ mod resource {
                 .map_err(|e| StoreError(format!("write {}: {e}", iri.as_str())))
         }
 
-        fn register(&self, model: &str) -> Result<(), StoreError> {
+        pub(super) fn register(&self, model: &str) -> Result<(), StoreError> {
             let mut registry = self.registry.lock().expect("registry lock");
             if registry.contains(model) {
                 return Ok(());
@@ -317,7 +323,7 @@ mod dir {
     use std::fs::{File, OpenOptions, TryLockError};
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use ikigai_core::{Capability, Kernel};
 
@@ -325,6 +331,7 @@ mod dir {
 
     /// The lock file's name.
     const LOCK_FILE: &str = "LOCK";
+    const PENDING: &str = "PENDING";
 
     /// A state directory on disk: a [`ResourceStore`] over a private `ikigai-fs` mount
     /// (`urn:file:`) jailed to the directory, and the directory's one-writer lock. See the
@@ -335,6 +342,7 @@ mod dir {
         /// never leaves the directory locked.
         _lock: File,
         models: ResourceStore,
+        transaction: Mutex<()>,
     }
 
     impl std::fmt::Debug for DirStore {
@@ -355,11 +363,56 @@ mod dir {
             let kernel = Kernel::new(Arc::new(ikigai_fs::space(&dir)));
             let models = ResourceStore::open(Arc::new(kernel), "urn:file:", Capability::root())
                 .map_err(|e| in_dir(&dir, e))?;
-            Ok(DirStore {
+            let store = DirStore {
                 dir,
                 _lock: lock,
                 models,
-            })
+                transaction: Mutex::new(()),
+            };
+            store.recover()?;
+            Ok(store)
+        }
+
+        // A pending creation is committed once its name is in the registry. Before that,
+        // discard it; afterward, finish writing the model before allowing any operation.
+        fn recover(&self) -> Result<(), StoreError> {
+            let path = self.dir.join(PENDING);
+            // ambient: fs: the journal belongs to the locked state directory
+            #[allow(clippy::disallowed_methods)]
+            let data = match std::fs::read(&path) {
+                Ok(data) => data,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(StoreError(format!("read {}: {e}", path.display()))),
+            };
+            let split = data
+                .iter()
+                .position(|b| *b == b'\n')
+                .ok_or_else(|| StoreError(format!("read {}: invalid journal", path.display())))?;
+            let model = std::str::from_utf8(&data[..split])
+                .map_err(|e| StoreError(format!("read {}: {e}", path.display())))?;
+            if self.models.registered()?.iter().any(|name| name == model) {
+                self.models
+                    .write(&self.models.model_iri(model)?, &data[split + 1..])
+                    .map_err(|e| in_dir(&self.dir, e))?;
+                self.sync_dir()?;
+            }
+            // ambient: fs: remove the completed or uncommitted journal under the lock
+            #[allow(clippy::disallowed_methods)]
+            std::fs::remove_file(&path)
+                .map_err(|e| StoreError(format!("remove {}: {e}", path.display())))?;
+            self.sync_dir()
+        }
+
+        fn sync_dir(&self) -> Result<(), StoreError> {
+            #[cfg(unix)]
+            {
+                // ambient: fs: persist directory entries in the locked state directory
+                #[allow(clippy::disallowed_methods)]
+                File::open(&self.dir)
+                    .and_then(|f| f.sync_all())
+                    .map_err(|e| StoreError(format!("sync {}: {e}", self.dir.display())))?;
+            }
+            Ok(())
         }
 
         /// The directory.
@@ -370,16 +423,48 @@ mod dir {
 
     impl Store for DirStore {
         fn load(&self, model: &str) -> Result<Option<Vec<u8>>, StoreError> {
+            let _guard = self.transaction.lock().expect("transaction lock");
+            self.recover()?;
             self.models.load(model).map_err(|e| in_dir(&self.dir, e))
         }
 
         fn save(&self, model: &str, bytes: &[u8]) -> Result<(), StoreError> {
+            let _guard = self.transaction.lock().expect("transaction lock");
+            self.recover()?;
+            if self.models.registered()?.iter().any(|name| name == model) {
+                return self
+                    .models
+                    .save(model, bytes)
+                    .map_err(|e| in_dir(&self.dir, e));
+            }
+            // Validate the target before recording it. The journal is staged and synced by
+            // the same Sink as model files, then the registry is the commit point.
+            let target = self.models.model_iri(model)?;
+            if model.contains('\n') {
+                return Err(StoreError("model name contains a newline".into()));
+            }
+            let mut pending = Vec::with_capacity(model.len() + 1 + bytes.len());
+            pending.extend_from_slice(model.as_bytes());
+            pending.push(b'\n');
+            pending.extend_from_slice(bytes);
             self.models
-                .save(model, bytes)
-                .map_err(|e| in_dir(&self.dir, e))
+                .write(&self.models.iri(PENDING)?, &pending)
+                .map_err(|e| in_dir(&self.dir, e))?;
+            self.sync_dir()?;
+            self.models
+                .register(model)
+                .map_err(|e| in_dir(&self.dir, e))?;
+            self.sync_dir()?;
+            self.models
+                .write(&target, bytes)
+                .map_err(|e| in_dir(&self.dir, e))?;
+            self.sync_dir()?;
+            self.recover()
         }
 
         fn registered(&self) -> Result<Vec<String>, StoreError> {
+            let _guard = self.transaction.lock().expect("transaction lock");
+            self.recover()?;
             self.models.registered()
         }
     }
@@ -391,8 +476,8 @@ mod dir {
     }
 
     /// Create the directory `0700` if needed (and make it `0700` if it is not), then take `<dir>/LOCK` exclusively and write this
-    /// process's id into it. The only file access this crate makes itself: `ikigai-fs` has no
-    /// lock, and the one-writer rule is what keeps two processes from each training a copy of
+    /// process's id into it. `ikigai-fs` has no lock, and the one-writer rule keeps two
+    /// processes from each training a copy of
     /// a model and losing the other's work.
     fn claim(dir: &Path) -> Result<File, StoreError> {
         // ambient: fs: creates the host-handed state directory, so the ikigai-fs jail has a root to open
