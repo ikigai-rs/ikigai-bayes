@@ -131,16 +131,35 @@ impl Class {
 
 /// Robinson's f(w) for a token in `spam` of `nspam` spam messages and `ham` of `nham` ham ones.
 pub fn robinson(spam: u64, ham: u64, nspam: u64, nham: u64, settings: &Settings) -> f64 {
+    robinson_with_strength(spam, ham, nspam, nham, settings).0
+}
+
+/// Return the probability and its distance from neutral, calculated before rounding to a probability.
+pub(crate) fn robinson_with_strength(
+    spam: u64,
+    ham: u64,
+    nspam: u64,
+    nham: u64,
+    settings: &Settings,
+) -> (f64, f64) {
     let n = (spam + ham) as f64;
+    let prior = settings.unknown_word_prob;
     if n == 0.0 {
-        return settings.unknown_word_prob;
+        return (prior, (prior - 0.5).abs());
     }
     // SpamBayes: a zero message count is read as one.
     let spam_ratio = spam as f64 / nspam.max(1) as f64;
     let ham_ratio = ham as f64 / nham.max(1) as f64;
     let p = spam_ratio / (spam_ratio + ham_ratio);
     let s = settings.unknown_word_strength;
-    (s * settings.unknown_word_prob + n * p) / (s + n)
+    let probability = (s * prior + n * p) / (s + n);
+    // Center the weighted rates before rounding so opposite clues with the same
+    // evidence retain the same strength.
+    let spam_weight = spam as f64 * nham.max(1) as f64;
+    let ham_weight = ham as f64 * nspam.max(1) as f64;
+    let centered_rate = (spam_weight - ham_weight) / (2.0 * (spam_weight + ham_weight));
+    let strength = (s * (prior - 0.5) + n * centered_rate).abs() / (s + n);
+    (probability, strength)
 }
 
 /// The chi-squared survival function `Q(χ², v)` (the probability that a chi-squared variable
@@ -190,8 +209,10 @@ pub fn chi2q(chi2: f64, v: usize) -> f64 {
 /// Each probability must lie strictly between 0 and 1, which every Robinson f(w) does (the prior
 /// keeps it off both ends).
 pub fn fisher(clues: &[f64]) -> f64 {
-    if clues.is_empty() {
-        return 0.5;
+    match clues {
+        [] => return 0.5,
+        [probability] => return *probability,
+        _ => {}
     }
     let n = clues.len();
     let ln_not: f64 = clues.iter().map(|p| (1.0 - p).ln()).sum();
@@ -303,5 +324,14 @@ mod tests {
         assert!(s.with_cutoffs(0.9, 0.2).is_err());
         assert!(s.with_cutoffs(-0.1, 0.5).is_err());
         assert!(s.with_cutoffs(0.1, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn a_single_clue_keeps_its_probability_at_the_cutoff() {
+        let p = 0.2;
+        let settings = Settings::default();
+        assert_eq!(fisher(&[p]), p);
+        assert_eq!(settings.class_of(fisher(&[p])), Class::Unsure);
+        assert_eq!(fisher(&[1e-20]), 1e-20);
     }
 }
