@@ -480,10 +480,7 @@ mod dir {
     /// processes from each training a copy of
     /// a model and losing the other's work.
     fn claim(dir: &Path) -> Result<File, StoreError> {
-        // ambient: fs: creates the host-handed state directory, so the ikigai-fs jail has a root to open
-        #[allow(clippy::disallowed_methods)]
-        let made = private_dir(dir);
-        made.map_err(|e| StoreError(format!("create {}: {e}", dir.display())))?;
+        private_dir(dir).map_err(|e| StoreError(format!("create {}: {e}", dir.display())))?;
         let path = dir.join(LOCK_FILE);
         // Never truncated on open: until the lock is ours, the pid in it is the holder's.
         // ambient: fs: the host-handed state directory's one-writer lock file; ikigai-fs has no lock resource
@@ -525,20 +522,27 @@ mod dir {
     /// the jail writes in it take the process's umask, so the directory is what closes them to
     /// every other account.
     fn private_dir(dir: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
         let mut builder = std::fs::DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]
+        builder.mode(0o700);
+        // ikigai-fs has no resource to set the jail root's permissions.
+        #[allow(clippy::disallowed_methods)] // ambient: fs: create the jail root at 0700 on Unix
+        let created = builder.create(dir);
+        created?;
+        #[cfg(unix)]
         {
-            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-            builder.mode(0o700);
-            builder.create(dir)?;
+            #[allow(clippy::disallowed_methods)] // ambient: fs: check the jail root's mode
             let mode = std::fs::metadata(dir)?.permissions().mode() & 0o7777;
             if mode != 0o700 {
-                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+                #[allow(clippy::disallowed_methods)] // ambient: fs: enforce owner-only mode 0700
+                let secured = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+                secured?;
             }
-            Ok(())
         }
-        #[cfg(not(unix))]
-        builder.create(dir)
+        Ok(())
     }
 }
