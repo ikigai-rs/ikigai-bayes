@@ -40,7 +40,7 @@ pub const MAX_MODEL_BYTES: usize = 64 * 1024 * 1024;
 
 /// The longest token a model file may hold, in bytes. The tokenizer never produces one near it
 /// (a word is at most [`MAX_WORD`](crate::tokenize::MAX_WORD) characters and a host at most 253
-/// bytes); a longer one marks a file this crate did not write.
+/// bytes); direct training and model loading both refuse longer tokens.
 pub const MAX_TOKEN_BYTES: usize = 512;
 
 /// The `format` a model file declares.
@@ -189,6 +189,16 @@ pub enum Change {
 pub enum Refusal {
     /// The model holds [`MAX_MESSAGES`] messages.
     TooManyMessages,
+    /// A new message has more than [`MAX_TOKENS`](crate::tokenize::MAX_TOKENS) tokens.
+    TooManyMessageTokens {
+        /// Number of tokens supplied.
+        count: usize,
+    },
+    /// A new message has a token longer than [`MAX_TOKEN_BYTES`] bytes.
+    TokenTooLong {
+        /// Size of the token in bytes.
+        bytes: usize,
+    },
     /// The message would take the model past [`MAX_DISTINCT_TOKENS`].
     TooManyTokens {
         /// Distinct tokens the model holds now.
@@ -205,6 +215,16 @@ impl fmt::Display for Refusal {
                 f,
                 "the model holds {MAX_MESSAGES} messages, its bound: untrain old messages or \
                  start another model"
+            ),
+            Refusal::TooManyMessageTokens { count } => write!(
+                f,
+                "the message has {count} tokens, past the bound of {} (refused, not truncated)",
+                crate::tokenize::MAX_TOKENS
+            ),
+            Refusal::TokenTooLong { bytes } => write!(
+                f,
+                "the message has a token of {bytes} bytes, past the bound of {MAX_TOKEN_BYTES} \
+                 (refused, not truncated)"
             ),
             Refusal::TooManyTokens { held, new } => write!(
                 f,
@@ -361,7 +381,8 @@ impl Model {
 
     /// Teach the model a message. Idempotent per digest: the same message with the same label is
     /// [`Change::Unchanged`]; with the other label it MOVES ([`Change::Moved`]), which is how a
-    /// correction works.
+    /// correction works. Tokens supplied for an existing digest are ignored; a new message is
+    /// refused if its token count or any token size exceeds the loader's bounds.
     pub fn train(
         &mut self,
         digest: ContentId,
@@ -386,6 +407,14 @@ impl Model {
                 },
             );
             return Ok(Change::Moved { from: previous });
+        }
+        if tokens.len() > crate::tokenize::MAX_TOKENS {
+            return Err(Refusal::TooManyMessageTokens {
+                count: tokens.len(),
+            });
+        }
+        if let Some(token) = tokens.iter().find(|token| token.len() > MAX_TOKEN_BYTES) {
+            return Err(Refusal::TokenTooLong { bytes: token.len() });
         }
         if self.messages.len() >= MAX_MESSAGES {
             return Err(Refusal::TooManyMessages);
