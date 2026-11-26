@@ -187,7 +187,7 @@ fn canonical_digest_ignores_training_order_and_default_file_bytes_are_unchanged(
     let mut a = Model::new("a");
     let mut b = Model::new("b");
     let legacy =
-        br#"{"format":"ikigai-bayes/model","version":1,"model":"a","tokenizer":"1","messages":[]}"#;
+        br#"{"format":"ikigai-bayes/model","version":1,"model":"a","tokenizer":"2","messages":[]}"#;
     assert_eq!(a.to_bytes(), legacy);
     assert_eq!(Model::from_bytes("a", legacy).unwrap().to_bytes(), legacy);
     a.train(first, Label::Spam, &tokens).unwrap();

@@ -1,3 +1,11 @@
+use ikigai_bayes::tokenize::tokenize;
+
+#[test]
+fn scheme_in_path_keeps_bare_www_authority() {
+    let tokens = tokenize("www.example.com/https://other.example", &[]).unwrap();
+    assert!(tokens.contains("url-scheme:none"), "{tokens:?}");
+    assert!(tokens.contains("url-host:www.example.com"), "{tokens:?}");
+}
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn failed_first_save_does_not_leave_model_bytes() {

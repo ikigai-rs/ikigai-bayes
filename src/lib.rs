@@ -59,7 +59,7 @@
 //!     answer,
 //!     "spam 0.920316\n\
 //!      digest b3:7d3bbbf2006ca64a1d7cd63f28099ea39765a2621e6187c4a1ad55c4a454aee4\n\
-//!      modelDigest b3:caafdf7713529950fc41e9e73c50cb1075cc77b29feb52537929c5a58e773e40\n\
+//!      modelDigest b3:f3c026d2611fd6196f6eee4edf231bf52d3978793c61fed6c5149d18d6f9759e\n\
 //!      clues 2 of 2\n\
 //!      0.844828 cheap\n\
 //!      0.844828 pills\n"
@@ -97,7 +97,7 @@
 //! );
 //! assert_eq!(
 //!     json,
-//!     r#"{"class":"spam","clueCount":2,"clues":[{"probability":0.8448275862068967,"token":"cheap"},{"probability":0.8448275862068967,"token":"pills"}],"cutoffs":{"ham":0.2,"spam":0.9},"digest":"b3:7d3bbbf2006ca64a1d7cd63f28099ea39765a2621e6187c4a1ad55c4a454aee4","model":"contact","modelDigest":"b3:caafdf7713529950fc41e9e73c50cb1075cc77b29feb52537929c5a58e773e40","score":0.920315826239094,"tokenizer":"1"}"#
+//!     r#"{"class":"spam","clueCount":2,"clues":[{"probability":0.8448275862068967,"token":"cheap"},{"probability":0.8448275862068967,"token":"pills"}],"cutoffs":{"ham":0.2,"spam":0.9},"digest":"b3:7d3bbbf2006ca64a1d7cd63f28099ea39765a2621e6187c4a1ad55c4a454aee4","model":"contact","modelDigest":"b3:f3c026d2611fd6196f6eee4edf231bf52d3978793c61fed6c5149d18d6f9759e","score":0.920315826239094,"tokenizer":"2"}"#
 //! );
 //! ```
 //!
@@ -146,7 +146,7 @@
 //!          schema:ratingExplanation \"ham below 0.2, spam at or above 0.9; 2 clue(s) combined\" ;\n  \
 //!          dcterms:identifier \"b3:7d3bbbf2006ca64a1d7cd63f28099ea39765a2621e6187c4a1ad55c4a454aee4\" ;\n  \
 //!          prov:wasDerivedFrom <urn:bayes:contact:stats> ;\n  \
-//!          schema:version \"b3:caafdf7713529950fc41e9e73c50cb1075cc77b29feb52537929c5a58e773e40\" ;\n  \
+//!          schema:version \"b3:f3c026d2611fd6196f6eee4edf231bf52d3978793c61fed6c5149d18d6f9759e\" ;\n  \
 //!          schema:additionalProperty <{score}:clue:cheap> .\n\
 //!          \n\
 //!          <{score}:clue:cheap> a schema:PropertyValue ;\n  \
@@ -236,11 +236,11 @@
 //! # call(Verb::Sink, train, &[("content", "can we meet on tuesday"), ("label", "ham")]);
 //! assert_eq!(
 //!     call(Verb::Source, "urn:bayes:contact:stats", &[]),
-//!     "model contact\nmessages spam 1 ham 1\ntokens 10\ncutoffs ham 0.2 spam 0.9\ntokenizer 1\nmodelDigest b3:caafdf7713529950fc41e9e73c50cb1075cc77b29feb52537929c5a58e773e40\n"
+//!     "model contact\nmessages spam 1 ham 1\ntokens 10\ncutoffs ham 0.2 spam 0.9\ntokenizer 2\nmodelDigest b3:f3c026d2611fd6196f6eee4edf231bf52d3978793c61fed6c5149d18d6f9759e\n"
 //! );
 //! assert_eq!(
 //!     call(Verb::Source, "urn:bayes:contact:stats", &[("as", "application/json")]),
-//!     r#"{"cutoffs":{"ham":0.2,"spam":0.9},"messages":{"ham":1,"spam":1},"model":"contact","modelDigest":"b3:caafdf7713529950fc41e9e73c50cb1075cc77b29feb52537929c5a58e773e40","tokenizer":"1","tokens":10}"#
+//!     r#"{"cutoffs":{"ham":0.2,"spam":0.9},"messages":{"ham":1,"spam":1},"model":"contact","modelDigest":"b3:f3c026d2611fd6196f6eee4edf231bf52d3978793c61fed6c5149d18d6f9759e","tokenizer":"2","tokens":10}"#
 //! );
 //! assert_eq!(call(Verb::Source, "urn:bayes:models", &[]), "contact");
 //! assert_eq!(
