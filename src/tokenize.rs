@@ -7,7 +7,7 @@
 //! rather than scored with tokens it never saw. Every rule below is pinned by a test, and
 //! changing any of them is a version bump.
 //!
-//! # The rules (version `1`)
+//! # The rules (version `2`)
 //!
 //! The body is split on whitespace into raw words. Each raw word is, in this order:
 //!
@@ -90,7 +90,7 @@ use std::fmt;
 
 /// The tokenizer's version, recorded in every model it trains. Bumped by any change to the
 /// rules in this module's documentation.
-pub const TOKENIZER_VERSION: &str = "1";
+pub const TOKENIZER_VERSION: &str = "2";
 
 /// The shortest word kept, in characters (SpamBayes: 3).
 pub const MIN_WORD: usize = 3;
@@ -272,9 +272,12 @@ fn is_all_caps(word: &str) -> bool {
 /// The three tokens of a lowercased URL.
 fn url_tokens(lowered: &str) -> [String; 3] {
     let trimmed = lowered.trim_end_matches(|c: char| c.is_ascii_punctuation() && c != '/');
-    let (scheme, rest) = match trimmed.split_once("://") {
-        Some((scheme, rest)) => (scheme, rest),
-        None => ("none", trimmed),
+    let (scheme, rest) = if let Some(rest) = trimmed.strip_prefix("http://") {
+        ("http", rest)
+    } else if let Some(rest) = trimmed.strip_prefix("https://") {
+        ("https", rest)
+    } else {
+        ("none", trimmed)
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     // Userinfo is dropped (it is per-message, and `user@host` is a classic disguise), and so is
@@ -552,6 +555,6 @@ mod tests {
     #[test]
     fn the_version_is_pinned() {
         // Changing any rule above is a version bump; this line is the reminder.
-        assert_eq!(TOKENIZER_VERSION, "1");
+        assert_eq!(TOKENIZER_VERSION, "2");
     }
 }

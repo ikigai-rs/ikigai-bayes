@@ -116,11 +116,16 @@ model by the host. Unit tests check `f(w)`, `Q` and the combining against hand-c
 - The SpamBayes project: [background](https://spambayes.sourceforge.io/background.html) and the
   [classifier and tokenizer](https://github.com/smontanaro/spambayes) this crate follows.
 
-### The tokenizer (version 1)
+### The tokenizer (version 2)
 
 A tokenizer change invalidates a model, so the tokenizer is versioned, every model records the
-version it was trained with, and a model trained with another version is refused at open. The
-rules, each pinned by a test (`src/tokenize.rs` documents them in full):
+version it was trained with, and a model trained with another version is refused at open.
+To upgrade a version 1 model, retain the original messages and labels, create a fresh state
+directory, and train each message again with this version. The saved token sets cannot be
+retokenized because they do not contain the original messages. Keep the old state until the
+rebuild is verified. A version 1 file records `"tokenizer":"1"` and is refused at open.
+
+The rules, each pinned by a test (`src/tokenize.rs` documents them in full):
 
 - **Words**: split on whitespace, surrounding punctuation trimmed, lowercased; 3 to 20
   characters kept; a longer one becomes SpamBayes's `skip:<first char> <length/10·10>` token.

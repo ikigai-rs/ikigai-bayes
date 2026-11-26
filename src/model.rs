@@ -704,7 +704,7 @@ mod tests {
             .unwrap_err()
             .contains("model `contact`'s file"));
         assert!(
-            refused(&good.replace("\"tokenizer\":\"1\"", "\"tokenizer\":\"0\""))
+            refused(&good.replace("\"tokenizer\":\"2\"", "\"tokenizer\":\"1\""))
                 .contains("retrained")
         );
         assert!(refused(&good.replace("\"version\":1", "\"version\":2")).contains("format"));
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn unsorted_tokens_are_refused() {
         let file = format!(
-            r#"{{"format":"{FORMAT}","version":1,"model":"m","tokenizer":"1","messages":[{{"digest":"{}","label":"spam","tokens":["b","a"]}}]}}"#,
+            r#"{{"format":"{FORMAT}","version":1,"model":"m","tokenizer":"2","messages":[{{"digest":"{}","label":"spam","tokens":["b","a"]}}]}}"#,
             d("x")
         );
         assert!(Model::from_bytes("m", file.as_bytes())
@@ -730,7 +730,7 @@ mod tests {
     fn a_repeated_digest_is_refused() {
         let msg = format!(r#"{{"digest":"{}","label":"spam","tokens":["a"]}}"#, d("x"));
         let file = format!(
-            r#"{{"format":"{FORMAT}","version":1,"model":"m","tokenizer":"1","messages":[{msg},{msg}]}}"#
+            r#"{{"format":"{FORMAT}","version":1,"model":"m","tokenizer":"2","messages":[{msg},{msg}]}}"#
         );
         assert!(Model::from_bytes("m", file.as_bytes())
             .unwrap_err()
